@@ -1,68 +1,87 @@
-import pandas as pd
+import os
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-import seaborn as sns
-%matplotlib inline
-
-np.random.seed(2)
-
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix
-import itertools
-
-from keras.utils.np_utils import to_categorical # convert to one-hot-encoding
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Flatten, Conv2D, MaxPool2D
-from keras.optimizers import RMSprop
-from keras.preprocessing.image import ImageDataGenerator
-from keras.callbacks import ReduceLROnPlateau, EarlyStopping
-
-sns.set(style='white', context='notebook', palette='deep')
+import cv2
+import requests
+import sys
 
 from PIL import Image
-import os
-from pylab import *
-import re
-from PIL import Image, ImageChops, ImageEnhance
-
-def get_imlist(path):
-    return [os.path.join(path,f) for f in os.listdir(path) if f.endswith('.jpg') or f.endswith('.png')]
+from io import BytesIO
+from matplotlib import pyplot
 
 
-def convert_to_ela_image(path, quality):
-    filename = path
-    resaved_filename = filename.split('.')[0] + '.resaved.jpg'
-    ELA_filename = filename.split('.')[0] + '.ela.png'
+import modelCore
+manTraNet = modelCore.load_pretrain_model_by_index( 4, './pretrained_weights')
 
-    im = Image.open(filename).convert('RGB')
-    im.save(resaved_filename, 'JPEG', quality=quality)
-    resaved_im = Image.open(resaved_filename)
+from datetime import datetime
+def read_rgb_image( image_file ) :
+    rgb = cv2.imread( image_file, 1 )[...,::-1]
+    return rgb
 
-    ela_im = ImageChops.difference(im, resaved_im)
+def decode_an_image_array( rgb, manTraNet, dn=1 ) :
+    x = np.expand_dims( rgb.astype('float32')/255.*2-1, axis=0 )[:,::dn,::dn]
+    t0 = datetime.now()
+    y = manTraNet.predict(x)[0,...,0]
+    t1 = datetime.now()
+    return y, t1-t0
 
-    extrema = ela_im.getextrema()
-    max_diff = max([ex[1] for ex in extrema])
-    if max_diff == 0:
-        max_diff = 1
-    scale = 255.0 / max_diff
+def decode_an_image_file( image_file, manTraNet, dn=1 ) :
+    rgb = read_rgb_image( image_file )
+    mask, ptime = decode_an_image_array( rgb, manTraNet, dn )
+    return rgb[::dn,::dn], mask, ptime.total_seconds()
 
-    ela_im = ImageEnhance.Brightness(ela_im).enhance(scale)
+def get_image_from_url(url, xrange=None, yrange=None, dn=1) :
+    response = requests.get(url)
+    img = Image.open(BytesIO(response.content))
+    img = np.array(img)
+    if img.shape[-1] > 3 :
+        img = img[...,:3]
+    ori = np.array(img)
+    if xrange is not None :
+        img = img[:,xrange[0]:xrange[1]]
+    if yrange is not None :
+        img = img[yrange[0]:yrange[1]]
+    mask, ptime =  decode_an_image_array( img, manTraNet, dn )
+    ptime = ptime.total_seconds()
+    # show results
+    pyplot.figure( figsize=(15,5) )
+    pyplot.title('Original Image')
+    pyplot.subplot(131)
+    pyplot.imshow( img )
+    pyplot.title('Forged Image (FotoCops)')
+    pyplot.subplot(132)
+    pyplot.imshow( mask, cmap='gray' )
+    pyplot.title('Predicted Mask (FotoCops)')
+    pyplot.subplot(133)
+    pyplot.imshow( np.round(np.expand_dims(mask,axis=-1) * img[::dn,::dn]).astype('uint8'), cmap='jet' )
+    pyplot.title('Highlighted Forged Regions')
+    # pyplot.suptitle('Decoded {} of size {} for {:.2f} seconds'.format( url, rgb.shape, ptime ) )
+    pyplot.show()
 
-    return ela_im
-
-import numpy as np
-import sys
-import os
-import random
-
-X_test = []
-X_test.append(array(convert_to_ela_image('idhar url vala image ka path hoga', 90).resize((128, 128))).flatten() / 255.0)
-X_test = np.array(X_test)
-X_test = X_test.reshape(-1, 128, 128, 3)
-
-import keras
-reconstructed_model = keras.models.load_model("idhar model jaha save hain wo path dena ")
-
-prediction = reconstructed_model.predict(X_test)
-print(prediction)
+def get_image_from_local(path, xrange=None, yrange=None, dn=1) :
+    img = Image.open(path)
+    img = np.array(img)
+    if img.shape[-1] > 3 :
+        img = img[...,:3]
+    ori = np.array(img)
+    if xrange is not None :
+        img = img[:,xrange[0]:xrange[1]]
+    if yrange is not None :
+        img = img[yrange[0]:yrange[1]]
+    mask, ptime =  decode_an_image_array( img, manTraNet, dn )
+    ptime = ptime.total_seconds()
+    # show results
+    pyplot.figure( figsize=(15,5) )
+    pyplot.title('Original Image')
+    pyplot.subplot(131)
+    pyplot.imshow( img )
+    pyplot.title('Forged Image (FotoCops)')
+    pyplot.subplot(132)
+    pyplot.imshow( mask, cmap='gray' )
+    pyplot.title('Predicted Mask (FotoCops)')
+    pyplot.subplot(133)
+    pyplot.imshow( np.round(np.expand_dims(mask,axis=-1) * img[::dn,::dn]).astype('uint8'), cmap='jet' )
+    pyplot.title('Highlighted Forged Regions')
+    # pyplot.suptitle('Decoded {} of size {} for {:.2f} seconds'.format( url, rgb.shape, ptime ) )
+    pyplot.show()
+# get_image_from_url('https://www.stockvault.net/blog/wp-content/uploads/2015/08/july-2.jpg')
+get_image_from_local('./data/forged/I00_dgzb67i_0.jpg')
